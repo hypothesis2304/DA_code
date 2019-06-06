@@ -78,7 +78,6 @@ def image_classification_test(loader, model, model_teacher, test_10crop=True):
     _, predict_teacher = torch.max(all_output_teacher, 1)
     accuracy = torch.sum(torch.squeeze(predict).float() == all_label).item() / float(all_label.size()[0])
     accuracy_teacher = torch.sum(torch.squeeze(predict_teacher).float() == all_label_teacher).item() / float(all_label_teacher.size()[0])
-
     return accuracy, accuracy_teacher
 
 
@@ -224,7 +223,7 @@ def train(config):
         softmax_out_src_teacher = nn.Softmax(dim=1)(outputs_source2)
         softmax_out_tar_teacher = nn.Softmax(dim=1)(outputs_target2)
         softmax_out_teacher = nn.Softmax(dim=1)(outputs_target)
-        
+
         if config['method'] == 'DANN+E':
             # ent_loss = loss.Entropy(softmax_out_tar)
             ent_loss = Hloss(outputs_target)
@@ -245,13 +244,13 @@ def train(config):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Conditional Domain Adversarial Network')
-    parser.add_argument('--method', type=str, default='DANN+E', choices=['DANN', 'DANN+E'])
+    parser.add_argument('--method', type=str, default='DANN', choices=['DANN', 'DANN+E'])
     parser.add_argument('--gpu_id', type=str, nargs='?', default='0', help="device id to run")
     parser.add_argument('--net', type=str, default='ResNet50', choices=["ResNet18", "ResNet34", "ResNet50", "ResNet101", "ResNet152", "VGG11", "VGG13", "VGG16", "VGG19", "VGG11BN", "VGG13BN", "VGG16BN", "VGG19BN", "AlexNet"])
     parser.add_argument('--dset', type=str, default='office', choices=['office', 'image-clef', 'visda', 'office-home'], help="The dataset or source dataset used")
     parser.add_argument('--s_dset_path', type=str, default='../data/office/webcam_list.txt', help="The source dataset path list")
     parser.add_argument('--t_dset_path', type=str, default='../data/office/amazon_list.txt', help="The target dataset path list")
-    parser.add_argument('--test_interval', type=int, default=50, help="interval of two continuous test phase")
+    parser.add_argument('--test_interval', type=int, default=5000, help="interval of two continuous test phase")
     parser.add_argument('--snapshot_interval', type=int, default=500000, help="interval of two continuous output model")
     parser.add_argument('--output_dir', type=str, default='san', help="output directory of our model (in ../snapshot directory)")
     parser.add_argument('--lr', type=float, default=0.001, help="learning rate")
@@ -287,7 +286,7 @@ if __name__ == "__main__":
     elif "ResNet" in args.net:
         config["network"] = {"call": network.resnet_model, "name":network.ResNetFc, \
             "params":{"resnet_name":args.net, "use_bottleneck":True, "bottleneck_dim":256, "ema":False, "new_cls":True}, \
-            "params_teacher":{"resnet_name":args.net, "use_bottleneck":True, "bottleneck_dim":256, "ema": True, "new_cls":True}} 
+            "params_teacher":{"resnet_name":args.net, "use_bottleneck":True, "bottleneck_dim":256, "ema": True, "new_cls":True}}
     elif "VGG" in args.net:
         config["network"] = {"name":network.VGGFc, \
             "params":{"vgg_name":args.net, "use_bottleneck":True, "bottleneck_dim":256, "new_cls":True} }
