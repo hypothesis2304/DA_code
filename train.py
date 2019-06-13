@@ -16,11 +16,22 @@ from torch.autograd import Variable
 import random
 import pdb
 import math
+import utils
+import string
+import copy
 from tqdm import tqdm, trange
+from collections import OrderedDict
+import torch.nn.functional as F
+
 
 torch.manual_seed(18)
 random.seed(18)
 
+activation_student = OrderedDict()
+def get_activation_student(name):
+    def hook(self, input_, output):
+        activation_student[name] =  output
+    return hook
 
 def image_classification_test(loader, model, model_teacher, test_10crop=True):
     start_test = True
@@ -82,6 +93,7 @@ def image_classification_test(loader, model, model_teacher, test_10crop=True):
 
 
 def train(config):
+    print("Deep copy of model with margin as 1.0")
     ## set pre-process
     prep_dict = {}
     prep_config = config["prep"]
@@ -126,9 +138,29 @@ def train(config):
     base_network = net_config["call"](net_config["name"], **net_config["params"])
     base_network_teacher = net_config["call"](net_config["name"], **net_config["params_teacher"])
     base_network = base_network.cuda()
-    base_network_teacher = base_network_teacher.cuda()
+    base_network_teacher = copy.deepcopy(base_network).cuda()
+    for param in base_network_teacher.parameters():
+        param.detach_()
+    # base_network_teacher = base_network_teacher.cuda()
 
-    ## add additional network for some methods
+    # print("check init: ", torch.equal(base_network.fc.weight, base_network_teacher.fc.weight))
+
+    base_network.layer1[-1].relu = nn.ReLU()
+    base_network.layer2[-1].relu = nn.ReLU()
+    base_network.layer3[-1].relu = nn.ReLU()
+    base_network.layer4[-1].relu = nn.ReLU()
+
+    base_network_teacher.layer1[-1].relu = nn.ReLU()
+    base_network_teacher.layer2[-1].relu = nn.ReLU()
+    base_network_teacher.layer3[-1].relu = nn.ReLU()
+    base_network_teacher.layer4[-1].relu = nn.ReLU()
+
+    # print(base_network)
+
+    for n, m in base_network.named_modules():
+    	if n == 'layer1.2.bn3' or 'layer2.3.bn3' or 'layer3.5.bn3' or 'layer4.2.bn3':
+    		m.register_forward_hook(get_activation_student(n))
+
     if config["loss"]["random"]:
         random_layer = network.RandomLayer([base_network.output_num(), class_num], config["loss"]["random_dim"])
         ad_net = network.AdversarialNetwork(config["loss"]["random_dim"], 1024)
@@ -140,7 +172,6 @@ def train(config):
     ad_net = ad_net.cuda()
     parameter_list = base_network.get_parameters() + ad_net.get_parameters()
     Hloss = loss.Entropy()
-
     ## set optimizer
     optimizer_config = config["optimizer"]
     optimizer = optimizer_config["type"](parameter_list, \
@@ -162,10 +193,13 @@ def train(config):
     len_train_target = len(dset_loaders["target"])
     transfer_loss_value = classifier_loss_value = total_loss_value = 0.0
     best_acc = 0.0
+    temperature = config["temperature"]
+
     for i in trange(config["num_iterations"], leave=False):
+        global activation_student
         if i % config["test_interval"] == config["test_interval"] - 1:
-            base_network.train(False)
-            base_network_teacher.train(False)
+            base_network.eval()
+            base_network_teacher.eval()
             temp_acc, temp_acc_teacher = image_classification_test(dset_loaders, \
                 base_network, base_network_teacher, test_10crop=prep_config["test_10crop"])
             temp_model = nn.Sequential(base_network_teacher)
@@ -173,21 +207,23 @@ def train(config):
                 best_acc = temp_acc
                 best_model = temp_model
             log_str = "iter: {:05d}, precision: {:.5f}".format(i, temp_acc)
-            log_str1 = "iter: {:05d}, precision: {:.5f}".format(i, temp_acc_teacher)
-            config["out_file"].write(log_str+"\n")
+            log_str1 = "precision: {:.5f}".format(temp_acc_teacher)
+            config["out_file"].write(log_str+ "\t"+log_str1 + "\t" + str(classifier_loss.item())+"\t" + str(dann_loss.item())+"\t" + str(ent_loss.item())+ "\t" + "\n")
             config["out_file"].flush()
-            config["out_file"].write(log_str1+"\n")
-            config["out_file"].flush()
+            print("ent Loss: ", ent_loss.item())
+            print("Dann loss: ", dann_loss.item())
+            print("Classification Loss: ", classifier_loss.item())
             print(log_str)
             print(log_str1)
-        if i % config["snapshot_interval"] == 0:
-            torch.save(nn.Sequential(base_network), osp.join(config["output_path"], \
-                "iter_{:05d}_model.pth.tar".format(i)))
+        # if i % config["snapshot_interval"] == 0:
+        #     torch.save(nn.Sequential(base_network), osp.join(config["output_path"], \
+        #         "iter_{:05d}_model.pth.tar".format(i)))
 
         loss_params = config["loss"]
         ## train one iter
         base_network.train(True)
         base_network_teacher.train(True)
+
         ad_net.train(True)
         optimizer = lr_scheduler(optimizer, i, **schedule_param)
         optimizer.zero_grad()
@@ -199,44 +235,79 @@ def train(config):
         inputs_source, labels_source = iter_source.next()
         inputs_target, labels_target = iter_target.next()
 
-        # inputs_source, inputs_target, labels_source = inputs_source.cuda(), inputs_target.cuda(), labels_source.cuda()
-        inputs_source1, inputs_source2 = network.Augmenter(inputs_source.numpy()), network.Augmenter(inputs_source.clone().detach().numpy())
-        inputs_target1, inputs_target2 = network.Augmenter(inputs_target.numpy()), network.Augmenter(inputs_target.clone().detach().numpy())
-        inputs_source1, labels_source = torch.from_numpy(inputs_source1).float().cuda(), labels_source.cuda()
-        inputs_target1 = torch.from_numpy(inputs_target1).float().cuda()
-        inputs_source2 = torch.from_numpy(inputs_source2).float().cuda()
-        inputs_target2 = torch.from_numpy(inputs_target2).float().cuda()
+        inputs_source1, inputs_source2, inputs_target1, inputs_target2, labels_source = utils.get_copies(inputs_source, inputs_target, labels_source)
 
+        margin = 1
+        loss_alter = 0
+
+        #### For source data
 
         features_source, outputs_source = base_network(inputs_source1)
+        # features_source2, outputs_source2 = base_network(inputs_source2)
+
+        feature1 = base_network_teacher.features1(inputs_source2)
+        feature2 = base_network_teacher.features2(feature1)
+        feature3 = base_network_teacher.features3(feature2)
+        feature4 = base_network_teacher.features4(feature3)
+        feature4_avg = base_network_teacher.avgpool(feature4)
+        feature4_res = feature4_avg.view(feature4_avg.size(0), -1)
+        features_source2 = base_network_teacher.bottleneck(feature4_res)
+        outputs_source2 = base_network_teacher.fc(features_source2)
+
+        loss_alter += loss.decision_boundary_transfer(activation_student['layer1.2.bn3'], feature1.detach(), margin)/(train_bs*activation_student['layer1.2.bn3'].size(1) * 8)
+        loss_alter += loss.decision_boundary_transfer(activation_student['layer2.3.bn3'], feature2.detach(), margin)/(train_bs*activation_student['layer2.3.bn3'].size(1) * 4)
+        loss_alter += loss.decision_boundary_transfer(activation_student['layer3.5.bn3'], feature3.detach(), margin)/(train_bs*activation_student['layer3.5.bn3'].size(1) * 2)
+        loss_alter += loss.decision_boundary_transfer(activation_student['layer4.2.bn3'], feature4.detach(), margin)/(train_bs*activation_student['layer4.2.bn3'].size(1))
+
+        ## For Target data
+
         features_target, outputs_target = base_network(inputs_target1)
+
+        feature1_teacher = base_network_teacher.features1(inputs_target2)
+        feature2_teacher = base_network_teacher.features2(feature1_teacher)
+        feature3_teacher = base_network_teacher.features3(feature2_teacher)
+        feature4_teacher = base_network_teacher.features4(feature3_teacher)
+        feature4_teacher_avg = base_network_teacher.avgpool(feature4_teacher)
+        feature4_teacher_res = feature4_teacher_avg.view(feature4_teacher_avg.size(0), -1)
+        features_target2 = base_network_teacher.bottleneck(feature4_teacher_res)
+        outputs_target2 = base_network_teacher.fc(features_target2)
+
+        loss_alter += loss.decision_boundary_transfer(activation_student['layer1.2.bn3'], feature1_teacher.detach(), margin)/(train_bs*activation_student['layer1.2.bn3'].size(1) * 8)
+        loss_alter += loss.decision_boundary_transfer(activation_student['layer2.3.bn3'], feature2_teacher.detach(), margin)/(train_bs*activation_student['layer2.3.bn3'].size(1) * 4)
+        loss_alter += loss.decision_boundary_transfer(activation_student['layer3.5.bn3'], feature3_teacher.detach(), margin)/(train_bs*activation_student['layer3.5.bn3'].size(1) * 2)
+        loss_alter += loss.decision_boundary_transfer(activation_student['layer4.2.bn3'], feature4_teacher.detach(), margin)/(train_bs*activation_student['layer4.2.bn3'].size(1))
+
+        loss_alter = loss_alter/1000 ## May be multiply with 4 later in tests
+        loss_alter = loss_alter.unsqueeze(0).unsqueeze(1)
+
         features = torch.cat((features_source, features_target), dim=0)
         outputs = torch.cat((outputs_source, outputs_target), dim=0)
         softmax_out_src = nn.Softmax(dim=1)(outputs_source)
         softmax_out_tar = nn.Softmax(dim=1)(outputs_target)
         softmax_out = nn.Softmax(dim=1)(outputs)
 
-        features_source2, outputs_source2 = base_network_teacher(inputs_source2)
-        features_target2, outputs_target2 = base_network_teacher(inputs_target2)
-        features_target = torch.cat((features_source2, features_target2), dim=0)
-        outputs_target = torch.cat((outputs_source2, outputs_target2), dim=0)
+        features_teacher = torch.cat((features_source2, features_target2), dim=0)
+        outputs_teacher = torch.cat((outputs_source2, outputs_target2), dim=0)
         softmax_out_src_teacher = nn.Softmax(dim=1)(outputs_source2)
         softmax_out_tar_teacher = nn.Softmax(dim=1)(outputs_target2)
-        softmax_out_teacher = nn.Softmax(dim=1)(outputs_target)
+        softmax_out_teacher = nn.Softmax(dim=1)(outputs_teacher)
 
         if config['method'] == 'DANN+E':
-            # ent_loss = loss.Entropy(softmax_out_tar)
             ent_loss = Hloss(outputs_target)
             dann_loss = loss.DANN(features, ad_net)
-            transfer_loss = dann_loss + ent_loss
         elif config['method']  == 'DANN':
-            transfer_loss = loss.DANN(features, ad_net)
+            dann_loss = loss.DANN(features, ad_net)
+            # dann_loss = 0
         else:
             raise ValueError('Method cannot be recognized.')
-
         classifier_loss = nn.CrossEntropyLoss()(outputs_source, labels_source)
-        total_loss = loss_params["trade_off"] * transfer_loss + classifier_loss
-        total_loss.backward()
+        # loss_KD = -(F.softmax(outputs_teacher/ temperature, 1).detach() *
+        # 	        (F.log_softmax(outputs/temperature, 1) - F.log_softmax(outputs_teacher/temperature, 1).detach())).sum() / train_bs
+        # print(loss_KD)
+        # total_loss =  loss_alter #+ (config["ent_loss"] * ent_loss)
+        ramp = utils.sigmoid_rampup(i, 10000)
+        total_loss =  dann_loss + classifier_loss + (ramp * ent_loss) #+ (config["ent_loss"] * ent_loss)
+        total_loss.backward(retain_graph=True)
         optimizer.step()
         loss.update_ema_variables(base_network, base_network_teacher, config["teacher_alpha"], i)
     torch.save(best_model, osp.join(config["output_path"], "best_model.pth.tar"))
@@ -244,25 +315,29 @@ def train(config):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Conditional Domain Adversarial Network')
-    parser.add_argument('--method', type=str, default='DANN', choices=['DANN', 'DANN+E'])
+    parser.add_argument('--method', type=str, default='DANN+E', choices=['DANN', 'DANN+E'])
     parser.add_argument('--gpu_id', type=str, nargs='?', default='0', help="device id to run")
     parser.add_argument('--net', type=str, default='ResNet50', choices=["ResNet18", "ResNet34", "ResNet50", "ResNet101", "ResNet152", "VGG11", "VGG13", "VGG16", "VGG19", "VGG11BN", "VGG13BN", "VGG16BN", "VGG19BN", "AlexNet"])
     parser.add_argument('--dset', type=str, default='office', choices=['office', 'image-clef', 'visda', 'office-home'], help="The dataset or source dataset used")
-    parser.add_argument('--s_dset_path', type=str, default='../data/office/webcam_list.txt', help="The source dataset path list")
-    parser.add_argument('--t_dset_path', type=str, default='../data/office/amazon_list.txt', help="The target dataset path list")
-    parser.add_argument('--test_interval', type=int, default=5000, help="interval of two continuous test phase")
+    parser.add_argument('--s_dset_path', type=str, default='../data/office/amazon_list.txt', help="The source dataset path list")
+    parser.add_argument('--t_dset_path', type=str, default='../data/office/webcam_list.txt', help="The target dataset path list")
+    parser.add_argument('--test_interval', type=int, default=1000, help="interval of two continuous test phase")
     parser.add_argument('--snapshot_interval', type=int, default=500000, help="interval of two continuous output model")
     parser.add_argument('--output_dir', type=str, default='san', help="output directory of our model (in ../snapshot directory)")
     parser.add_argument('--lr', type=float, default=0.001, help="learning rate")
-    parser.add_argument('--random', type=bool, default=False, help="whether use random projection")
+    parser.add_argument('--random', type=bool, default=True, help="whether use random projection")
     parser.add_argument('--teacher_alpha', type=float, default=0.999, help="amount of weight for weighted average")
+    parser.add_argument('--ent_loss', type=float, default=0.01, help="parameter to balance entropy loss")
+    parser.add_argument('--temperature', type=int, default=3, help="Temperature parameter")
     args = parser.parse_args()
     os.environ["CUDA_VISIBLE_DEVICES"] = args.gpu_id
     #os.environ["CUDA_VISIBLE_DEVICES"] = '0,1,2,3'
 
     # train config
     config = {}
+    config["temperature"] = args.temperature
     config["teacher_alpha"] = args.teacher_alpha
+    config["ent_loss"] = args.ent_loss
     config['method'] = args.method
     config["gpu"] = args.gpu_id
     config["num_iterations"] = 100004
@@ -270,9 +345,24 @@ if __name__ == "__main__":
     config["snapshot_interval"] = args.snapshot_interval
     config["output_for_test"] = True
     config["output_path"] = "snapshot/" + args.output_dir
+
+    src = (args.s_dset_path.split('/'))[-1][0]
+    tar = (args.t_dset_path.split('/'))[-1][0]
+
     if not osp.exists(config["output_path"]):
         os.system('mkdir -p '+config["output_path"])
     config["out_file"] = open(osp.join(config["output_path"], "log.txt"), "w")
+
+    curr_path = os.getcwd()
+    pathfile = os.path.join(curr_path,'snapshot/san/')
+    os.chdir(pathfile)
+    files = os.listdir(os.path.join(curr_path, pathfile))
+    for file in files:
+        if file == 'log.txt':
+            dest =  str(args.dset) + '-' + src.upper() + '-' + tar.upper() + '.txt'
+            os.rename(file, dest)
+    os.chdir(curr_path)
+
     if not osp.exists(config["output_path"]):
         os.mkdir(config["output_path"])
 
@@ -298,8 +388,8 @@ if __name__ == "__main__":
                            "lr_param":{"lr":args.lr, "gamma":0.001, "power":0.75} }
 
     config["dataset"] = args.dset
-    config["data"] = {"source":{"list_path":args.s_dset_path, "batch_size":36}, \
-                      "target":{"list_path":args.t_dset_path, "batch_size":36}, \
+    config["data"] = {"source":{"list_path":args.s_dset_path, "batch_size":12}, \
+                      "target":{"list_path":args.t_dset_path, "batch_size":12}, \
                       "test":{"list_path":args.t_dset_path, "batch_size":4}}
 
     if config["dataset"] == "office":
@@ -326,6 +416,9 @@ if __name__ == "__main__":
         config["network"]["params_teacher"]["class_num"] = 65
     else:
         raise ValueError('Dataset cannot be recognized. Please define your own dataset here.')
+
     config["out_file"].write(str(config))
+    config["out_file"].write('\n')
+    config["out_file"].write("Sigmoid rampup decrease from 1 - 0 then 1")
     config["out_file"].flush()
     train(config)
