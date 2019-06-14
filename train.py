@@ -305,7 +305,8 @@ def train(config):
         # 	        (F.log_softmax(outputs/temperature, 1) - F.log_softmax(outputs_teacher/temperature, 1).detach())).sum() / train_bs
         # print(loss_KD)
         # total_loss =  loss_alter #+ (config["ent_loss"] * ent_loss)
-        ramp = utils.sigmoid_rampup(i, 10000)
+        ramp = utils.sigmoid_rampup(i, 100004)
+        # ramp = 0.1
         total_loss =  dann_loss + classifier_loss + (ramp * ent_loss) #+ (config["ent_loss"] * ent_loss)
         total_loss.backward(retain_graph=True)
         optimizer.step()
@@ -318,9 +319,9 @@ if __name__ == "__main__":
     parser.add_argument('--method', type=str, default='DANN+E', choices=['DANN', 'DANN+E'])
     parser.add_argument('--gpu_id', type=str, nargs='?', default='0', help="device id to run")
     parser.add_argument('--net', type=str, default='ResNet50', choices=["ResNet18", "ResNet34", "ResNet50", "ResNet101", "ResNet152", "VGG11", "VGG13", "VGG16", "VGG19", "VGG11BN", "VGG13BN", "VGG16BN", "VGG19BN", "AlexNet"])
-    parser.add_argument('--dset', type=str, default='office', choices=['office', 'image-clef', 'visda', 'office-home'], help="The dataset or source dataset used")
-    parser.add_argument('--s_dset_path', type=str, default='../data/office/amazon_list.txt', help="The source dataset path list")
-    parser.add_argument('--t_dset_path', type=str, default='../data/office/webcam_list.txt', help="The target dataset path list")
+    parser.add_argument('--dset', type=str, default='office-home', choices=['office', 'image-clef', 'visda', 'office-home'], help="The dataset or source dataset used")
+    parser.add_argument('--sdpath', type=str, default='../data/office-home/Clipart.txt', help="The source dataset path list")
+    parser.add_argument('--tdpath', type=str, default='../data/office-home/Product.txt', help="The target dataset path list")
     parser.add_argument('--test_interval', type=int, default=1000, help="interval of two continuous test phase")
     parser.add_argument('--snapshot_interval', type=int, default=500000, help="interval of two continuous output model")
     parser.add_argument('--output_dir', type=str, default='san', help="output directory of our model (in ../snapshot directory)")
@@ -346,8 +347,8 @@ if __name__ == "__main__":
     config["output_for_test"] = True
     config["output_path"] = "snapshot/" + args.output_dir
 
-    src = (args.s_dset_path.split('/'))[-1][0]
-    tar = (args.t_dset_path.split('/'))[-1][0]
+    src = (args.sdpath.split('/'))[-1][0]
+    tar = (args.tdpath.split('/'))[-1][0]
 
     if not osp.exists(config["output_path"]):
         os.system('mkdir -p '+config["output_path"])
@@ -388,18 +389,18 @@ if __name__ == "__main__":
                            "lr_param":{"lr":args.lr, "gamma":0.001, "power":0.75} }
 
     config["dataset"] = args.dset
-    config["data"] = {"source":{"list_path":args.s_dset_path, "batch_size":12}, \
-                      "target":{"list_path":args.t_dset_path, "batch_size":12}, \
-                      "test":{"list_path":args.t_dset_path, "batch_size":4}}
+    config["data"] = {"source":{"list_path":args.sdpath, "batch_size":12}, \
+                      "target":{"list_path":args.tdpath, "batch_size":12}, \
+                      "test":{"list_path":args.tdpath, "batch_size":4}}
 
     if config["dataset"] == "office":
-        if ("amazon" in args.s_dset_path and "webcam" in args.t_dset_path) or \
-           ("webcam" in args.s_dset_path and "dslr" in args.t_dset_path) or \
-           ("webcam" in args.s_dset_path and "amazon" in args.t_dset_path) or \
-           ("dslr" in args.s_dset_path and "amazon" in args.t_dset_path):
+        if ("amazon" in args.sdpath and "webcam" in args.tdpath) or \
+           ("webcam" in args.sdpath and "dslr" in args.tdpath) or \
+           ("webcam" in args.sdpath and "amazon" in args.tdpath) or \
+           ("dslr" in args.sdpath and "amazon" in args.tdpath):
             config["optimizer"]["lr_param"]["lr"] = 0.001 # optimal parameters
-        elif ("amazon" in args.s_dset_path and "dslr" in args.t_dset_path) or \
-             ("dslr" in args.s_dset_path and "webcam" in args.t_dset_path):
+        elif ("amazon" in args.sdpath and "dslr" in args.tdpath) or \
+             ("dslr" in args.sdpath and "webcam" in args.tdpath):
             config["optimizer"]["lr_param"]["lr"] = 0.0003 # optimal parameters
         config["network"]["params"]["class_num"] = 31
         config["network"]["params_teacher"]["class_num"] = 31
