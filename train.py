@@ -22,10 +22,15 @@ import copy
 from tqdm import tqdm, trange
 from collections import OrderedDict
 import torch.nn.functional as F
+import get_confident_idx
 
-
-torch.manual_seed(18)
+torch.cuda.manual_seed(18)
+torch.cuda.manual_seed_all(18)
+torch.backends.cudnn.deterministic = True
+torch.backends.cudnn.enabled = False
+torch.backends.cudnn.benchmark = False
 random.seed(18)
+np.random.seed(18)
 
 activation_student = OrderedDict()
 def get_activation_student(name):
@@ -260,8 +265,14 @@ def train(config):
         loss_alter += loss.decision_boundary_transfer(activation_student['layer4.2.bn3'], feature4.detach(), margin)/(train_bs*activation_student['layer4.2.bn3'].size(1))
 
         ## For Target data
+        ramp = utils.sigmoid_rampup(i, 100004)
+        ramp_confidence = utils.sigmoid_rampup(5*i, 100004)
 
         features_target, outputs_target = base_network(inputs_target1)
+        sample_selection_indices = get_confident_idx.confident_samples(base_network,
+        inputs_target1, ramp_confidence, class_num)
+
+        confident_targets = utils.subsample(outputs_target, sample_selection_indices)
 
         feature1_teacher = base_network_teacher.features1(inputs_target2)
         feature2_teacher = base_network_teacher.features2(feature1_teacher)
@@ -293,7 +304,7 @@ def train(config):
         softmax_out_teacher = nn.Softmax(dim=1)(outputs_teacher)
 
         if config['method'] == 'DANN+E':
-            ent_loss = Hloss(outputs_target)
+            ent_loss = Hloss(confident_targets)
             dann_loss = loss.DANN(features, ad_net)
         elif config['method']  == 'DANN':
             dann_loss = loss.DANN(features, ad_net)
@@ -305,8 +316,7 @@ def train(config):
         # 	        (F.log_softmax(outputs/temperature, 1) - F.log_softmax(outputs_teacher/temperature, 1).detach())).sum() / train_bs
         # print(loss_KD)
         # total_loss =  loss_alter #+ (config["ent_loss"] * ent_loss)
-        ramp = utils.sigmoid_rampup(i, 100004)
-        # ramp = 0.1
+
         total_loss =  dann_loss + classifier_loss + (ramp * ent_loss) #+ (config["ent_loss"] * ent_loss)
         total_loss.backward(retain_graph=True)
         optimizer.step()
@@ -322,13 +332,13 @@ if __name__ == "__main__":
     parser.add_argument('--dset', type=str, default='office-home', choices=['office', 'image-clef', 'visda', 'office-home'], help="The dataset or source dataset used")
     parser.add_argument('--sdpath', type=str, default='../data/office-home/Clipart.txt', help="The source dataset path list")
     parser.add_argument('--tdpath', type=str, default='../data/office-home/Product.txt', help="The target dataset path list")
-    parser.add_argument('--test_interval', type=int, default=1000, help="interval of two continuous test phase")
+    parser.add_argument('--test_interval', type=int, default=2000, help="interval of two continuous test phase")
     parser.add_argument('--snapshot_interval', type=int, default=500000, help="interval of two continuous output model")
     parser.add_argument('--output_dir', type=str, default='san', help="output directory of our model (in ../snapshot directory)")
     parser.add_argument('--lr', type=float, default=0.001, help="learning rate")
     parser.add_argument('--random', type=bool, default=True, help="whether use random projection")
     parser.add_argument('--teacher_alpha', type=float, default=0.999, help="amount of weight for weighted average")
-    parser.add_argument('--ent_loss', type=float, default=0.01, help="parameter to balance entropy loss")
+    parser.add_argument('--ent_loss', type=float, default=0.1, help="parameter to balance entropy loss")
     parser.add_argument('--temperature', type=int, default=3, help="Temperature parameter")
     args = parser.parse_args()
     os.environ["CUDA_VISIBLE_DEVICES"] = args.gpu_id
