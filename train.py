@@ -270,7 +270,7 @@ def train(config):
 
         features_target, outputs_target = base_network(inputs_target1)
         sample_selection_indices = get_confident_idx.confident_samples(base_network,
-        inputs_target1, ramp_confidence, class_num)
+        inputs_target1, ramp_confidence, train_bs)
 
         confident_targets = utils.subsample(outputs_target, sample_selection_indices)
 
@@ -329,9 +329,9 @@ if __name__ == "__main__":
     parser.add_argument('--method', type=str, default='DANN+E', choices=['DANN', 'DANN+E'])
     parser.add_argument('--gpu_id', type=str, nargs='?', default='0', help="device id to run")
     parser.add_argument('--net', type=str, default='ResNet50', choices=["ResNet18", "ResNet34", "ResNet50", "ResNet101", "ResNet152", "VGG11", "VGG13", "VGG16", "VGG19", "VGG11BN", "VGG13BN", "VGG16BN", "VGG19BN", "AlexNet"])
-    parser.add_argument('--dset', type=str, default='office-home', choices=['office', 'image-clef', 'visda', 'office-home'], help="The dataset or source dataset used")
-    parser.add_argument('--sdpath', type=str, default='../data/office-home/Clipart.txt', help="The source dataset path list")
-    parser.add_argument('--tdpath', type=str, default='../data/office-home/Product.txt', help="The target dataset path list")
+    parser.add_argument('--dset', type=str, default='office', choices=['office', 'image-clef', 'visda', 'office-home'], help="The dataset or source dataset used")
+    parser.add_argument('--sdpath', type=str, default='../data/office/dslr_list.txt', help="The source dataset path list")
+    parser.add_argument('--tdpath', type=str, default='../data/office/amazon_list.txt', help="The target dataset path list")
     parser.add_argument('--test_interval', type=int, default=2000, help="interval of two continuous test phase")
     parser.add_argument('--snapshot_interval', type=int, default=500000, help="interval of two continuous output model")
     parser.add_argument('--output_dir', type=str, default='san', help="output directory of our model (in ../snapshot directory)")
