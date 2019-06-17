@@ -270,7 +270,7 @@ def train(config):
 
         features_target, outputs_target = base_network(inputs_target1)
         sample_selection_indices = get_confident_idx.confident_samples(base_network,
-        inputs_target1, ramp_confidence, train_bs)
+        inputs_target1, ramp_confidence, class_num, train_bs)
 
         confident_targets = utils.subsample(outputs_target, sample_selection_indices)
 
