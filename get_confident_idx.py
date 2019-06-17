@@ -7,7 +7,7 @@ import pdb
 import pred_var
 import train
 
-def confident_samples(model, target_samples, k, bs, filter=10):
+def confident_samples(model, target_samples, k, class_num, bs, filter=10):
 	target_out = []
 	k = k * bs
 	confidence = torch.zeros((target_samples.size(0),class_num))
