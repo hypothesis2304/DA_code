@@ -6,25 +6,22 @@ import math
 import pdb
 import pred_var
 import train
+import network
 
 def confident_samples(model, target_samples, k, class_num, bs, filter=10):
-	target_out = []
-	k = k * bs
-	confidence = torch.zeros((target_samples.size(0),class_num))
-	with torch.no_grad():
-		model.eval()
-		for i in range(filter):
-			features, outputs = model(target_samples)
-			predictions = nn.Softmax(dim=1)(outputs)
-			target_out.append(torch.unsqueeze(predictions, 2))
-			target_out += target_out
-			confidence += predictions.to('cpu')
-		all_predictions = torch.cat(target_out, dim=2)
-		predictive_variance = pred_var.predictiveVariance(all_predictions)
-		confidence /= (filter*1.0)
-		max_values = confidence.max(dim=1)
-		max_class = confidence.argmax(dim=1)
-		rank_samples = torch.argsort(predictive_variance)
-		samples_to_select = rank_samples[:int(k)]
-	model.train()
-	return samples_to_select
+    target_out = []
+    k = k * bs
+    with torch.no_grad():
+        model.eval()
+        for i in range(filter):
+            aug_target = network.Augmenter(target_samples.clone().detach().numpy())
+            aug_target = torch.from_numpy(aug_target).float().cuda()
+            features, outputs = model(aug_target)
+            predictions = nn.Softmax(dim=1)(outputs)
+            target_out.append(torch.unsqueeze(predictions, 2))
+        all_predictions = torch.cat(target_out, dim=2)
+        predictive_variance = pred_var.predictiveVariance(all_predictions)
+        rank_samples = torch.argsort(predictive_variance)
+        samples_to_select = rank_samples[:int(k)]
+    model.train()
+    return samples_to_select
